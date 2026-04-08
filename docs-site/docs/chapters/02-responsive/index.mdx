@@ -7,8 +7,294 @@ description: "Build responsive layouts with LayoutBuilder and adaptive navigatio
 
 # Think Responsive
 
-*Coming soon — this chapter will cover responsive layouts and adaptive navigation.*
-
 import WwwBankEmbed from '@site/src/components/WwwBankEmbed/WwwBankEmbed';
 
-<WwwBankEmbed route="/" height={400} />
+Responsive design isn't just a nice-to-have on the web — it's a baseline expectation. Your users might open wwwBank on a laptop, a widescreen monitor, a tablet, or a phone browser. On mobile apps you usually control the screen size; on the web you don't. This chapter digs deep into how wwwBank adapts its layout to any viewport, and teaches you the Flutter patterns to replicate that in your own apps.
+
+<WwwBankEmbed route="/" height={480} />
+
+Try resizing the embed above (or your browser window if you're reading this on a wide screen). Notice the navigation snapping between the side rail and the bottom bar — that's a single breakpoint driving the whole layout.
+
+---
+
+## Why responsive matters more on the web
+
+When you ship a Flutter mobile app, both iOS and Android define what "small screen" means for you. The web has no such contract. A user might run your app in a 320 px portrait window on a budget phone or in a 3840 px ultrawide monitor. Worse, they might resize the window mid-session — something that never happens on mobile.
+
+The Flutter team designed several tools specifically for this: `LayoutBuilder`, `MediaQuery`, and `ConstrainedBox`. Understanding when to reach for each one will save you from layout bugs that only appear on specific screen sizes.
+
+---
+
+## The 600 px breakpoint
+
+wwwBank makes a single, decisive choice: **600 px is the boundary between "narrow" and "wide"**. Below 600 px, the app looks and feels like a mobile app. At 600 px and above, it gains the side navigation rail typical of a desktop dashboard.
+
+This number comes from Material Design's layout guidelines: 600 dp is where the system considers a screen "medium" (tablet territory). Using a single well-reasoned breakpoint is usually better than having five different breakpoints — it keeps the codebase simple and predictable.
+
+Open `lib/widgets/wwwbank_scaffold.dart` and you'll find the constant right at the top:
+
+```dart
+const double _breakpoint = 600;
+```
+
+---
+
+## MediaQuery.sizeOf — reading the viewport width
+
+The scaffold reads the viewport width using `MediaQuery.sizeOf`:
+
+```dart
+@override
+Widget build(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  final isWide = width >= _breakpoint;
+  ...
+}
+```
+
+`MediaQuery.sizeOf(context)` is the modern, performance-optimised way to read the screen size in Flutter 3.10+. It only triggers a rebuild when the *size* changes, not when other `MediaQueryData` properties (like text scale or padding) change. The older `MediaQuery.of(context).size` would rebuild on any `MediaQueryData` change — which on the web can happen frequently as the browser reports soft-keyboard appearance, safe area changes, and so on.
+
+<div className="wb-callout wb-callout--blue">
+
+**Prefer `MediaQuery.sizeOf` over `MediaQuery.of(...).size`** in Flutter 3.10+ for a meaningful performance win. The API was specifically introduced to reduce unnecessary rebuilds.
+
+</div>
+
+---
+
+## LayoutBuilder vs MediaQuery — which to use?
+
+You'll see both used in wwwBank. Here's the key distinction:
+
+- **`MediaQuery.sizeOf`** gives you the *window* size. Use it when the layout decision is tied to the full viewport — like switching between side nav and bottom nav.
+- **`LayoutBuilder`** gives you the *available space* of the parent widget. Use it when the layout decision is tied to the space actually given to a particular widget — like a card grid inside a panel that might itself be constrained.
+
+The scaffold uses `MediaQuery.sizeOf` for the navigation switch because that decision is genuinely viewport-level. The account card grid uses `LayoutBuilder` because it lives inside a scrolling column that might have padding, and its available width can differ from the window width.
+
+---
+
+## The adaptive scaffold layout
+
+Here's the full responsive body logic from `WwwBankScaffold`:
+
+```dart
+return Scaffold(
+  appBar: AppBar(
+    title: const Text('wwwBank'),
+    actions: [
+      IconButton(
+        icon: Icon(
+          accessible
+              ? Icons.accessibility_new
+              : Icons.accessibility_new_outlined,
+        ),
+        tooltip: accessible ? 'Accessible mode ON' : 'Accessible mode OFF',
+        onPressed: onToggleAccessible,
+      ),
+    ],
+  ),
+  body: isWide
+      ? Row(
+          children: [
+            NavigationRail(
+              selectedIndex: currentIndex,
+              onDestinationSelected: onTabChanged,
+              labelType: NavigationRailLabelType.all,
+              destinations: List.generate(
+                _tabLabels.length,
+                (i) => NavigationRailDestination(
+                  icon: Icon(_tabIcons[i]),
+                  selectedIcon: Icon(_tabSelectedIcons[i]),
+                  label: Text(_tabLabels[i]),
+                ),
+              ),
+            ),
+            const VerticalDivider(thickness: 1, width: 1),
+            Expanded(child: body),
+          ],
+        )
+      : body,
+  bottomNavigationBar: isWide
+      ? null
+      : NavigationBar(
+          selectedIndex: currentIndex,
+          onDestinationSelected: onTabChanged,
+          destinations: List.generate(
+            _tabLabels.length,
+            (i) => NavigationDestination(
+              icon: Icon(_tabIcons[i]),
+              selectedIcon: Icon(_tabSelectedIcons[i]),
+              label: _tabLabels[i],
+            ),
+          ),
+        ),
+);
+```
+
+There are two key things happening here:
+
+1. **The `body` slot** is a `Row` when wide (rail + divider + content) and just `body` when narrow (content fills the whole height).
+2. **The `bottomNavigationBar` slot** is `null` when wide and a `NavigationBar` when narrow.
+
+Setting `bottomNavigationBar: null` completely removes it from the layout — Flutter won't reserve space for it. This is cleaner than hiding it with `Visibility` or `Opacity`, which can leave ghost space or keep the widget in the accessibility tree.
+
+<div className="wb-callout wb-callout--amber">
+
+**Never show both NavigationRail and NavigationBar at the same time for the same destinations.** Keyboard users navigating with Tab would encounter both, and screen reader users would hear the same destinations announced twice. The `isWide` guard ensures exactly one is shown.
+
+</div>
+
+---
+
+## LayoutBuilder — the dashboard grid
+
+Zoom into the dashboard's account card section in `lib/screens/dashboard/dashboard_screen.dart`:
+
+```dart
+class _AccountCardsGrid extends StatelessWidget {
+  const _AccountCardsGrid({required this.accounts});
+  final List<Account> accounts;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth > 600 ? 3 : 1;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+            childAspectRatio: 1.6,
+          ),
+          itemCount: accounts.length,
+          itemBuilder: (context, index) => _AccountCard(
+            account: accounts[index],
+          ),
+        );
+      },
+    );
+  }
+}
+```
+
+`LayoutBuilder` receives a `BoxConstraints` object describing the space available to this widget. When `constraints.maxWidth` is greater than 600, the grid uses three columns; otherwise it stacks everything into a single column.
+
+Notice how this uses the same 600 px threshold as the scaffold — but measured in the widget's local space, not the window. On a wide viewport, the dashboard body sits next to the 80 px navigation rail, so its available width is roughly `windowWidth - 80`. Using `LayoutBuilder` means the grid reacts to its *actual* available space, not a width that's slightly off because it doesn't account for the rail.
+
+---
+
+## ConstrainedBox for max-width forms
+
+Responsive design isn't just about making things *wider* on large screens — sometimes you need to *prevent* them from stretching too far. The login screen is a perfect example:
+
+```dart
+// lib/screens/login/login_screen.dart
+return Scaffold(
+  body: Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 400),
+      child: Card(
+        margin: const EdgeInsets.all(24),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ... form fields
+            ],
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+```
+
+Without `ConstrainedBox(maxWidth: 400)`, the login card would stretch edge-to-edge on a wide monitor — a 1200 px wide email field is both ugly and hard to use. The `Center` widget centres the constrained card horizontally. Together, `Center` + `ConstrainedBox` is the standard Flutter idiom for centred, max-width content on the web.
+
+Apply this pattern to any form, dialog, or article-style content that shouldn't sprawl across a large screen.
+
+---
+
+## Testing at different viewport widths
+
+The fastest way to test responsive layouts is Chrome DevTools' device toolbar:
+
+1. Open Chrome and navigate to your running Flutter web app.
+2. Press **F12** (or **Cmd+Option+I** on Mac) to open DevTools.
+3. Press **Ctrl+Shift+M** (or click the phone/tablet icon in the toolbar) to toggle Device Mode.
+4. Drag the viewport edge to resize, or type a width directly in the dimension field at the top.
+
+Test these specific widths for wwwBank:
+
+| Width | Expected layout |
+|---|---|
+| 375 px | Single-column cards, bottom navigation bar |
+| 599 px | Still single-column, bottom nav — just below the breakpoint |
+| 600 px | Switches to NavigationRail, three-column cards appear |
+| 1024 px | Wide layout, rail + three columns |
+
+<div className="wb-callout wb-callout--green">
+
+**Resize test at exactly 599 px and 600 px** to verify the breakpoint fires correctly. If you see both nav patterns, or neither, something is wrong with the `isWide` calculation.
+
+</div>
+
+---
+
+## What's Next
+
+In **Chapter 3: Every Page Has an Address**, we'll look at how `go_router` gives every screen a real URL, how the browser back button works automatically, and how you can deep-link directly to `/transactions` or `/settings`.
+
+→ [Chapter 3: Every Page Has an Address](/chapters/routing)
+
+---
+
+## Quiz
+
+Test what you've learned:
+
+**1. Why is `MediaQuery.sizeOf(context)` preferred over `MediaQuery.of(context).size` in Flutter 3.10+?**
+
+<details>
+<summary>Show answer</summary>
+
+`MediaQuery.sizeOf` only triggers a rebuild when the *size* changes. `MediaQuery.of(context).size` rebuilds whenever any `MediaQueryData` property changes (text scale, padding, etc.), which causes unnecessary rebuilds on the web where these values can change frequently.
+
+</details>
+
+---
+
+**2. The `_AccountCardsGrid` uses `LayoutBuilder` instead of `MediaQuery.sizeOf`. Why does that make more sense here?**
+
+<details>
+<summary>Show answer</summary>
+
+The grid lives inside a body that is already constrained by the `NavigationRail` on wide screens. `LayoutBuilder` gives the grid its *actual available width* (window width minus the rail). Using `MediaQuery.sizeOf` would give the full window width — slightly too large — and the grid would switch to three columns at the wrong moment.
+
+</details>
+
+---
+
+**3. What's the purpose of setting `bottomNavigationBar: null` rather than wrapping the `NavigationBar` in a `Visibility` widget?**
+
+<details>
+<summary>Show answer</summary>
+
+Setting the slot to `null` removes the widget entirely from the layout — Flutter doesn't reserve space for it. `Visibility(visible: false)` hides the widget visually but can leave reserved space in the layout, and `Visibility` with `maintainSemantics: true` can leave the widget in the accessibility tree, causing screen readers to announce destinations that aren't visible.
+
+</details>
+
+---
+
+**4. The login screen wraps its form in `ConstrainedBox(maxWidth: 400)`. What would happen without this constraint on a 1440 px monitor?**
+
+<details>
+<summary>Show answer</summary>
+
+The login card would expand to fill the full screen width, producing an extremely wide, unusable form. Text fields spanning 1400 px look broken and make the UI feel unpolished. The `ConstrainedBox` keeps the form at a readable width regardless of the viewport size.
+
+</details>

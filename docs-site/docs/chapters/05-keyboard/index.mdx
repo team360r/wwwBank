@@ -7,8 +7,378 @@ description: "Tab order, keyboard shortcuts, focus management, and skip links"
 
 # Keyboard is King
 
-*Coming soon — this chapter will cover keyboard navigation and focus management.*
-
 import WwwBankEmbed from '@site/src/components/WwwBankEmbed/WwwBankEmbed';
 
-<WwwBankEmbed route="/" height={400} />
+Keyboard accessibility is one of the most fundamental requirements of the web. Users who cannot use a mouse — because of motor impairments, temporary injuries, or simply because they prefer the keyboard — depend entirely on Tab, Enter, Space, and arrow keys to navigate your application. Screen reader users also navigate primarily by keyboard. If an element cannot be reached by keyboard, it effectively does not exist for those users.
+
+WCAG 2.1 Success Criterion 2.1.1 (Level A) states that all functionality must be operable through a keyboard interface. This is not a "nice to have" — it is the floor, the minimum. This chapter covers how Flutter web handles focus traversal and how you can ensure wwwBank meets that bar with confidence.
+
+<WwwBankEmbed route="/" height={480} />
+
+---
+
+## How Flutter handles focus on the web
+
+On native mobile, Flutter uses a directional focus model — users swipe or use D-pad to move between elements. On the web, there is an additional expectation: Tab and Shift+Tab traverse focusable elements in document order, just like any HTML application.
+
+Flutter web satisfies this by mapping its focus system onto the browser's native focus management. Widgets that are interactive — `ElevatedButton`, `TextFormField`, `NavigationRail` destinations, `Checkbox`, `Switch` — are automatically focusable and participate in Tab order. Flutter walks the widget tree in layout order (roughly top-left to bottom-right) to determine that order.
+
+The hidden `<flt-semantics>` DOM tree that Flutter builds for screen readers (covered in Chapter 4) is also the structure that receives keyboard focus. So fixing semantics and fixing keyboard access are closely related.
+
+---
+
+## FocusNode — owning a focus slot
+
+Every focusable widget in Flutter has an associated `FocusNode`. Normally Flutter creates these for you automatically, but you can create your own when you need control:
+
+```dart
+class _MyWidgetState extends State<MyWidget> {
+  final _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose(); // always dispose!
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      focusNode: _focusNode,
+      decoration: const InputDecoration(labelText: 'Amount (£)'),
+    );
+  }
+}
+```
+
+Once you have a `FocusNode`, you can programmatically request focus — useful for managing focus after route transitions, dialog closures, or step completions:
+
+```dart
+// After navigating to step 2, move focus to the first field
+_focusNode.requestFocus();
+```
+
+You can also listen for focus changes:
+
+```dart
+_focusNode.addListener(() {
+  if (_focusNode.hasFocus) {
+    // field just gained focus — perhaps show a hint
+  }
+});
+```
+
+---
+
+## FocusTraversalGroup — defining traversal regions
+
+By default, Tab order follows widget tree order. For most UIs this is fine. But sometimes you want to define explicit regions with their own traversal policy — for example, to make the navigation rail traverse separately from the main content area.
+
+`FocusTraversalGroup` wraps a subtree and applies a traversal policy to it:
+
+```dart
+Row(
+  children: [
+    FocusTraversalGroup(
+      policy: OrderedTraversalPolicy(),
+      child: NavigationRail(
+        selectedIndex: currentIndex,
+        onDestinationSelected: onTabChanged,
+        labelType: NavigationRailLabelType.all,
+        destinations: const [
+          NavigationRailDestination(
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard),
+            label: Text('Dashboard'),
+          ),
+          // ...
+        ],
+      ),
+    ),
+    const VerticalDivider(thickness: 1, width: 1),
+    FocusTraversalGroup(
+      child: Expanded(child: body),
+    ),
+  ],
+)
+```
+
+With this setup, Tab traverses through the navigation rail first, then moves into the main content area as a separate group. This mirrors the expected reading and navigation order for the layout.
+
+---
+
+## FocusTraversalOrder — explicit traversal sequences
+
+When layout order does not match logical reading order — for example, a multi-column form or a card grid — you can assign an explicit sequence using `FocusTraversalOrder`:
+
+```dart
+FocusTraversalGroup(
+  policy: OrderedTraversalPolicy(),
+  child: Column(
+    children: [
+      FocusTraversalOrder(
+        order: const NumericFocusOrder(1),
+        child: TextFormField(
+          decoration: const InputDecoration(labelText: 'From Account'),
+        ),
+      ),
+      FocusTraversalOrder(
+        order: const NumericFocusOrder(2),
+        child: TextFormField(
+          decoration: const InputDecoration(labelText: 'To Account'),
+        ),
+      ),
+      FocusTraversalOrder(
+        order: const NumericFocusOrder(3),
+        child: TextFormField(
+          decoration: const InputDecoration(labelText: 'Amount (£)'),
+        ),
+      ),
+    ],
+  ),
+)
+```
+
+The `NumericFocusOrder` values determine the Tab sequence — lower numbers are focused first, regardless of where they appear in the widget tree.
+
+---
+
+## CallbackShortcuts — keyboard shortcuts
+
+Power users expect keyboard shortcuts. They also happen to be essential for users who cannot use a pointer. Flutter's `CallbackShortcuts` widget lets you intercept specific key combinations and trigger actions:
+
+```dart
+CallbackShortcuts(
+  bindings: {
+    const SingleActivator(LogicalKeyboardKey.keyT, control: true):
+        () => context.go('/transfer'),
+    const SingleActivator(LogicalKeyboardKey.keyD, control: true):
+        () => context.go('/'),
+    const SingleActivator(LogicalKeyboardKey.keyX, control: true):
+        () => context.go('/transactions'),
+  },
+  child: Focus(
+    autofocus: true,
+    child: WwwBankScaffold(
+      accessible: accessible,
+      currentIndex: currentIndex,
+      onTabChanged: onTabChanged,
+      onToggleAccessible: onToggleAccessible,
+      body: body,
+    ),
+  ),
+)
+```
+
+Wrap this around the scaffold so shortcuts are available anywhere in the app. The `Focus(autofocus: true)` wrapper ensures the widget tree has a focus node capable of receiving keyboard events even before the user has Tab-navigated anywhere.
+
+<div className="wb-callout wb-callout--amber">
+
+**Screen reader conflicts:** Some key combinations are intercepted by screen readers before they reach your app. `Ctrl+T` is generally safe on the web. Avoid single-letter shortcuts without modifiers — they conflict with screen reader virtual cursor navigation. Always test shortcuts with VoiceOver and NVDA enabled.
+
+</div>
+
+---
+
+## Skip-to-content link
+
+On a webpage with a navigation rail or header, a keyboard user has to Tab through every navigation item on every page load before reaching the main content. The standard solution is a "skip navigation" link: a visually hidden link that appears on first Tab press and jumps focus directly to the main content area.
+
+Flutter web does not render HTML links, so you implement this as a focusable widget that becomes visible on focus:
+
+```dart
+class SkipToContentLink extends StatefulWidget {
+  const SkipToContentLink({super.key, required this.contentFocusNode});
+  final FocusNode contentFocusNode;
+
+  @override
+  State<SkipToContentLink> createState() => _SkipToContentLinkState();
+}
+
+class _SkipToContentLinkState extends State<SkipToContentLink> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (hasFocus) => setState(() => _focused = hasFocus),
+      child: Semantics(
+        button: true,
+        label: 'Skip to main content',
+        child: GestureDetector(
+          onTap: () => widget.contentFocusNode.requestFocus(),
+          child: AnimatedOpacity(
+            opacity: _focused ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 150),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Theme.of(context).colorScheme.primary,
+              child: Text(
+                'Skip to main content',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onPrimary,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
+Place this at the very top of your scaffold — before the `NavigationRail` — so it is the first Tab stop. When the user presses Tab for the first time, the link appears. Pressing Enter (or tapping) calls `contentFocusNode.requestFocus()` and jumps to the main content area.
+
+---
+
+## Focus indicators — visible focus rings
+
+Focus indicators are the visual cue that tells keyboard users where they are. In Flutter, Material 3 renders focus rings automatically using the `focusColor` from the `ColorScheme`. You can verify this is working by Tab-navigating through the app — every interactive element should show a visible ring or highlight.
+
+<div className="wb-callout wb-callout--amber">
+
+**High contrast matters:** The default Material 3 focus ring uses the primary colour. Ensure your primary colour (wwwBank uses `#1565C0` — a dark blue) has sufficient contrast against the surface colour on which it appears. A 3:1 contrast ratio is the minimum for UI components under WCAG 2.1 SC 1.4.11.
+
+</div>
+
+If you need to customise the focus indicator style for a specific widget, use `FocusNode` and paint it yourself:
+
+```dart
+Container(
+  decoration: BoxDecoration(
+    border: focusNode.hasFocus
+        ? Border.all(
+            color: Theme.of(context).colorScheme.primary,
+            width: 3,
+          )
+        : Border.all(color: Colors.transparent, width: 3),
+    borderRadius: BorderRadius.circular(8),
+  ),
+  child: child,
+)
+```
+
+---
+
+## Managing focus on route changes
+
+When a user navigates to a new route — clicking Dashboard, then Transfer — keyboard focus should move to the main content area of the new page. If it doesn't, the user may still have focus on the navigation rail item they just activated, forcing them to Tab through all navigation items again to reach the new content.
+
+Flutter's `go_router` does not automatically manage focus on route changes. You need to implement this yourself using a `FocusNode` on each screen's main content area and requesting focus in `initState` or using a `WidgetsBinding.instance.addPostFrameCallback`:
+
+```dart
+class _DashboardScreenState extends State<DashboardScreen> {
+  final _contentFocusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    // Move focus to main content after the route transition completes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _contentFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _contentFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _contentFocusNode,
+      child: SingleChildScrollView(
+        // ... dashboard content
+      ),
+    );
+  }
+}
+```
+
+The `addPostFrameCallback` ensures the focus request happens after the route animation completes — requesting focus during the animation can cause visual glitches.
+
+<div className="wb-callout wb-callout--blue">
+
+**The ARIA parallel:** HTML single-page applications do exactly the same thing — after a route change, they call `.focus()` on an element at the top of the new content. Flutter web just has a Dart API for doing it instead of a JavaScript one.
+
+</div>
+
+---
+
+## Practical exercise — keyboard shortcuts for the NavigationRail
+
+The `WwwBankScaffold` in `lib/widgets/wwwbank_scaffold.dart` renders a `NavigationRail` on wide screens. Your task is to add keyboard shortcuts so users can jump between tabs without Tab-navigating through the rail.
+
+1. Open `lib/widgets/wwwbank_scaffold.dart`.
+2. Wrap the `Scaffold` body in a `CallbackShortcuts` + `Focus` pair.
+3. Add bindings for:
+   - `Ctrl+1` — navigate to Dashboard (index 0)
+   - `Ctrl+2` — navigate to Transactions (index 1)
+   - `Ctrl+3` — navigate to Transfer (index 2)
+   - `Ctrl+4` — navigate to Settings (index 3)
+4. Each binding should call `onTabChanged(index)`.
+5. Run in Chrome and test: does pressing `Ctrl+2` move you to the Transactions tab?
+6. Check that focus moves to the new content area after the tab change.
+
+<div className="wb-callout wb-callout--green">
+
+**Success criteria:** Pressing `Ctrl+1` through `Ctrl+4` from anywhere in the app activates the correct tab. Each keyboard shortcut works without touching the mouse. VoiceOver or NVDA announces the new screen content after the shortcut is pressed.
+
+</div>
+
+---
+
+## What's Next
+
+In **Chapter 6: Forms That Work**, we tackle one of the most complex accessibility challenges on the web: forms. The Transfer screen's multi-step Stepper form gives us a rich teaching example — we'll add autofill hints, improve validation error announcements, and make sure every field has a proper label.
+
+→ [Chapter 6: Forms That Work](/chapters/forms)
+
+---
+
+## Quiz
+
+**1. Why is keyboard accessibility required, and what WCAG criterion mandates it?**
+
+<details>
+<summary>Show answer</summary>
+
+Keyboard accessibility is required because users with motor impairments, users who prefer keyboard navigation, and all screen reader users operate primarily or exclusively through keyboard input. WCAG 2.1 Success Criterion 2.1.1 (Level A, "Keyboard") requires that all functionality be operable through a keyboard interface without requiring specific timing for individual keystrokes.
+
+</details>
+
+---
+
+**2. What is `FocusTraversalGroup` used for, and when would you use it in a layout like wwwBank?**
+
+<details>
+<summary>Show answer</summary>
+
+`FocusTraversalGroup` defines a subtree with its own focus traversal policy, independent of other groups. In a layout like wwwBank — with a `NavigationRail` on the left and main content on the right — you would wrap each in its own `FocusTraversalGroup` so Tab traverses the navigation destinations as one group, then moves to the main content area as a separate group, matching the expected left-to-right reading and navigation order.
+
+</details>
+
+---
+
+**3. Why does focus need to be managed explicitly after route changes in Flutter web?**
+
+<details>
+<summary>Show answer</summary>
+
+Flutter's router (including `go_router`) does not automatically move focus to the new screen's content after a route transition. Without explicit focus management, keyboard focus may remain on whatever element triggered the navigation — such as a `NavigationRail` destination — forcing the user to Tab through all navigation items again on every page visit. The fix is to call `FocusNode.requestFocus()` on the main content area inside `addPostFrameCallback` after the route transition completes.
+
+</details>
+
+---
+
+**4. You add a `Ctrl+T` shortcut to jump to the Transfer screen. A user reports it doesn't work when their screen reader is running. What should you investigate first?**
+
+<details>
+<summary>Show answer</summary>
+
+Screen readers intercept many keyboard shortcuts before they reach the browser or the application. `Ctrl+T` in particular is used by some screen readers and browsers (it opens a new browser tab in most browsers without a screen reader). You should test the shortcut with VoiceOver (macOS/iOS), NVDA (Windows), and TalkBack (Android) to identify which ones intercept it, then consider an alternative binding — such as `Alt+T` or a custom chord — that does not conflict with screen reader or browser shortcuts.
+
+</details>

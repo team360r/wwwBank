@@ -9,8 +9,9 @@ import 'screens/transactions/transactions_screen.dart';
 import 'screens/transfer/transfer_screen.dart';
 import 'widgets/wwwbank_scaffold.dart';
 
-GoRouter createRouter(AppState appState) {
+GoRouter createRouter(AppState appState, {GlobalKey<NavigatorState>? navigatorKey}) {
   return GoRouter(
+    navigatorKey: navigatorKey,
     refreshListenable: appState,
     initialLocation: '/',
     redirect: (context, state) {

@@ -1,0 +1,54 @@
+.container {
+  margin: 20px 0;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--ifm-card-background-color);
+  border-bottom: 1px solid var(--ifm-toc-border-color);
+  font-size: 0.85rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+}
+
+.controlButton {
+  padding: 4px 10px;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--ifm-font-color-base);
+}
+
+.controlButton:hover {
+  background: var(--ifm-hover-overlay);
+}
+
+.iframe {
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+.resizeHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  cursor: ns-resize;
+  background: var(--ifm-card-background-color);
+  border-top: 1px solid var(--ifm-toc-border-color);
+  color: var(--ifm-color-emphasis-400);
+  font-size: 0.75rem;
+}
